@@ -1,5 +1,7 @@
 # ⚡ Word Race
 
+**Play it:** https://kentlord16.github.io/Word-Race/
+
 Crack as many five-letter words as you can before the clock runs out, then dare a friend to beat you on the **same words**.
 
 - **3 or 5 minute races.** Six guesses a word; solve it (or run out of guesses) and the next one drops straight in. Stuck? **Skip** it and keep moving.
@@ -17,6 +19,8 @@ npm run dev      # http://localhost:5173
 npm test
 npm run build    # static site in dist/ — host it anywhere
 ```
+
+Every push to `main` publishes the game to GitHub Pages (`.github/workflows/pages.yml`). Challenge links point at wherever the game is being served.
 
 ## Code map
 
