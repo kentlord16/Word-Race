@@ -1,0 +1,11 @@
+{
+  "name": "Word Race",
+  "short_name": "Word Race",
+  "description": "Solve as many words as you can before the clock runs out.",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#5b2be0",
+  "theme_color": "#6a3df0",
+  "icons": [{ "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
