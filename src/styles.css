@@ -238,7 +238,7 @@ button {
 /* ---------- Home ---------- */
 
 .home {
-  gap: 1rem;
+  gap: 1.1rem;
   justify-content: center;
   text-align: center;
 }
@@ -310,13 +310,6 @@ button {
     opacity: 0;
     translate: 0 -1.5rem;
   }
-}
-
-.tagline {
-  max-width: 17rem;
-  font-size: 1.1rem;
-  line-height: 1.35;
-  color: var(--soft);
 }
 
 .modes {
@@ -405,16 +398,23 @@ button {
 .name-field {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 0.75rem;
   width: 100%;
-  padding: 0 0.25rem;
+  padding: 0.35rem 0.35rem 0.35rem 1rem;
+  border-radius: 1.1rem;
+  background: var(--glass);
   font-size: 0.95rem;
   color: var(--soft);
+  text-align: left;
+}
+
+.name-field span {
+  flex: none;
 }
 
 .name-field input {
-  width: 9.5rem;
+  flex: 1;
+  min-width: 0;
   padding: 0.55rem 0.85rem;
   border: 0;
   border-radius: 0.8rem;
@@ -530,6 +530,12 @@ button {
 }
 
 .board {
+  /* Fit the word's length across and six rows down, whichever is tighter. */
+  --tile: min(
+    3.7rem,
+    calc((min(100vw, 30rem) - 1.5rem) / (var(--len, 5) * 1.13)),
+    calc((100dvh - 4 * var(--key-h) - 9rem) / 6.8)
+  );
   display: grid;
   gap: calc(var(--tile) * 0.13);
   animation: deal 0.28s cubic-bezier(0.2, 1.2, 0.4, 1);
@@ -822,27 +828,26 @@ button {
 }
 
 .daily-icon {
-  display: flex;
+  display: grid;
   flex: none;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  width: 3.2rem;
-  height: 3.2rem;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
   border-radius: 0.9rem;
   background: var(--sun);
-  color: var(--ink);
-  font-size: 1.15rem;
-  font-weight: 700;
+  font-size: 1.5rem;
   line-height: 1;
   box-shadow: 0 4px 0 #d9a900;
 }
 
-.daily-icon small {
-  font-size: 0.6rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.daily.race .daily-icon {
+  background: var(--pink);
+  box-shadow: 0 4px 0 var(--pink-lip);
+}
+
+.daily:disabled .daily-icon {
+  filter: saturate(0.6);
+  opacity: 0.85;
 }
 
 .daily-text {
@@ -916,6 +921,188 @@ button {
   color: var(--ink);
   font-size: 0.85rem;
   font-weight: 600;
+}
+
+/* ---------- Home: game picker and dailies ---------- */
+
+.play-panel {
+  display: grid;
+  gap: 0.85rem;
+  width: 100%;
+}
+
+.kinds {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.3rem;
+  padding: 0.3rem;
+  border-radius: 1.2rem;
+  background: var(--dim);
+}
+
+.kind {
+  padding: 0.6rem;
+  border-radius: 0.9rem;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--soft);
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.kind.on {
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 3px 0 var(--white-lip);
+}
+
+.blurb {
+  min-height: 1.4em;
+  color: var(--soft);
+  font-size: 1rem;
+}
+
+.dailies {
+  display: grid;
+  gap: 0.6rem;
+  width: 100%;
+  margin-top: 0.4rem;
+}
+
+.dailies h2 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-align: left;
+  text-transform: uppercase;
+  color: var(--sun);
+  padding-left: 0.25rem;
+}
+
+.mini-hearts i {
+  font-style: normal;
+  color: rgba(255, 255, 255, 0.3);
+  letter-spacing: 0.05em;
+}
+
+.mini-hearts i.full {
+  color: var(--pink);
+}
+
+/* ---------- Play: hearts ---------- */
+
+.hearts {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.hearts svg {
+  width: 2rem;
+  height: 2rem;
+  fill: var(--pink);
+  stroke: var(--pink-lip);
+  stroke-width: 1.2;
+  filter: drop-shadow(0 2px 0 var(--pink-lip));
+  transition:
+    fill 0.3s,
+    transform 0.3s;
+}
+
+.hearts svg.lost {
+  fill: var(--dim);
+  stroke: transparent;
+  filter: none;
+  transform: scale(0.85);
+  animation: heart-lost 0.5s ease-out;
+}
+
+@keyframes heart-lost {
+  0% {
+    fill: var(--pink);
+    transform: scale(1.3);
+  }
+}
+
+/* ---------- Results: the tower ---------- */
+
+.tower-view {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  width: 100%;
+  margin: 0.5rem 0 0.25rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 4px solid rgba(255, 255, 255, 0.25);
+}
+
+.floor {
+  --c: var(--mint);
+  --lip: var(--mint-lip);
+  display: flex;
+  justify-content: center;
+  gap: 0.35rem;
+  width: min(100%, 17rem);
+  padding: 0.4rem 0;
+  border-radius: 0.7rem;
+  background: var(--c);
+  color: var(--ink);
+  box-shadow: 0 4px 0 var(--lip);
+  font-size: 1rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  animation: stack 0.4s calc(0.4s + var(--n) * 0.09s) cubic-bezier(0.2, 1.4, 0.4, 1) backwards;
+}
+
+.floor:nth-child(odd) {
+  translate: -0.4rem 0;
+}
+
+.floor:nth-child(even) {
+  translate: 0.4rem 0;
+}
+
+.floor i {
+  font-style: normal;
+}
+
+.floor.sun {
+  --c: var(--sun);
+  --lip: #d9a900;
+}
+
+.floor.orange {
+  --c: var(--orange);
+  --lip: var(--orange-lip);
+}
+
+.floor.pink {
+  --c: var(--pink);
+  --lip: var(--pink-lip);
+}
+
+.floor.violet {
+  --c: #b99cff;
+  --lip: #7d5ae0;
+}
+
+.floor.sky {
+  --c: #7fd4ff;
+  --lip: #3a9bd0;
+}
+
+.tower-view .more {
+  margin-top: 0.15rem;
+  font-size: 0.85rem;
+  color: var(--soft);
+}
+
+@keyframes stack {
+  from {
+    opacity: 0;
+    transform: translateY(-2rem);
+  }
 }
 
 /* ---------- Results ---------- */

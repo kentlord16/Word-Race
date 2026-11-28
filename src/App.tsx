@@ -1,7 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
+import { dictionaryReady } from './dictionary';
 import {
+  type Board,
   type Challenge,
-  DAILY_MINUTES,
+  DAILY_RACE_MINUTES,
+  DAILY_TOWER_LIVES,
+  KINDS,
+  type Kind,
   MODES,
   type Minutes,
   type Result,
@@ -11,19 +16,27 @@ import {
   dailySeed,
   decodeChallenge,
   encodeChallenge,
+  livesLeft,
   newSeed,
-  plural,
   scoreOf,
   shareText,
+  unit,
 } from './game';
-import { Play } from './Play';
+import { Play, type Progress } from './Play';
 import { setSoundEnabled, sfx } from './sound';
-import { type Saved, load, save } from './store';
+import { type Saved, bestKey, load, save } from './store';
+
+void dictionaryReady;
 
 type Screen =
   | { name: 'home' }
-  | { name: 'play'; seed: string; minutes: Minutes; challenge: Challenge | null; daily?: number }
+  | { name: 'play'; kind: Kind; seed: string; minutes: Minutes | null; challenge: Challenge | null; daily?: number }
   | { name: 'done'; result: Result; challenge: Challenge | null; newBest: boolean; best?: Score };
+
+const KIND_INFO: Record<Kind, { title: string; icon: string; blurb: string }> = {
+  tower: { title: 'Tower', icon: '🏗️', blurb: '3 to 8 letters. Every word is a floor.' },
+  race: { title: 'Race', icon: '⚡', blurb: 'Five-letter words, as many as you can crack.' },
+};
 
 export function App() {
   const [saved, setSaved] = useState(load);
@@ -43,60 +56,89 @@ export function App() {
   }, []);
 
   const update = (patch: Partial<Saved>) => setSaved((s) => ({ ...s, ...patch }));
+  const today = dailyNumber();
 
   function dropChallenge() {
     setChallenge(null);
     history.replaceState(null, '', location.pathname + location.search);
   }
 
-  function start(minutes: Minutes, from: Challenge | null) {
+  function start(kind: Kind, minutes: Minutes, from: Challenge | null = null) {
     if (challenge) dropChallenge();
-    setScreen({ name: 'play', seed: from?.seed ?? newSeed(), minutes, challenge: from });
+    setScreen({ name: 'play', kind, seed: from?.seed ?? newSeed(), minutes, challenge: from });
   }
 
-  function startDaily() {
-    const day = dailyNumber();
-    setScreen({ name: 'play', seed: dailySeed(day), minutes: DAILY_MINUTES, challenge: null, daily: day });
+  function startDaily(kind: Kind) {
+    setScreen({
+      name: 'play',
+      kind,
+      seed: dailySeed(kind, today),
+      minutes: kind === 'race' ? DAILY_RACE_MINUTES : null,
+      challenge: null,
+      daily: today,
+    });
   }
 
   function finish(result: Result, from: Challenge | null) {
     const score = scoreOf(result);
-    const best = saved.best[result.minutes];
-    const newBest = score.solved > 0 && (!best || compareScores(score, best) > 0);
-    update({
-      races: saved.races + 1,
-      words: saved.words + score.solved,
-      ...(newBest && { best: { ...saved.best, [result.minutes]: score } }),
-      ...(result.daily && { daily: { day: result.daily, solved: score.solved } }),
-    });
+    const key = result.minutes && !result.daily ? bestKey(result.kind, result.minutes) : null;
+    const best = key ? saved.best[key] : undefined;
+    const newBest = !!key && score.solved > 0 && (!best || compareScores(score, best) > 0);
+    setSaved((s) => ({
+      ...s,
+      games: s.games + 1,
+      solved: s.solved + score.solved,
+      ...(newBest && key && { best: { ...s.best, [key]: score } }),
+      ...(result.daily && result.kind === 'race' && { dailyRace: { day: result.daily, solved: score.solved } }),
+      ...(result.daily &&
+        result.kind === 'tower' && { dailyTower: { day: result.daily, boards: result.boards, guesses: [], done: true } }),
+    }));
     sfx.finish();
     setScreen({ name: 'done', result, challenge: from, newBest, best });
   }
 
   if (screen.name === 'play') {
+    const dailyTower = !!screen.daily && screen.kind === 'tower';
+    const resume = dailyTower && saved.dailyTower?.day === screen.daily ? saved.dailyTower : null;
     return (
       <Play
         key={screen.seed}
+        kind={screen.kind}
         seed={screen.seed}
         minutes={screen.minutes}
+        lives={dailyTower ? DAILY_TOWER_LIVES : undefined}
+        resume={resume ?? undefined}
+        onSave={
+          dailyTower
+            ? (p: Progress) => update({ dailyTower: { day: screen.daily!, ...p, done: false } })
+            : undefined
+        }
         onDone={(result) => finish({ ...result, daily: screen.daily }, screen.challenge)}
         onQuit={() => setScreen({ name: 'home' })}
       />
     );
   }
+
   if (screen.name === 'done') {
+    const { result } = screen;
+    // After a daily, "again" offers the timed version of the same game.
+    const againMinutes = result.minutes && !result.daily ? result.minutes : saved.minutes;
     return (
       <Done
         {...screen}
         name={saved.name}
-        onAgain={() => start(screen.result.minutes, null)}
+        onName={(name) => update({ name })}
+        againLabel={result.daily ? `Play a ${againMinutes}-min ${KIND_INFO[result.kind].title.toLowerCase()}` : 'Play again'}
+        onAgain={() => start(result.kind, againMinutes)}
         onHome={() => setScreen({ name: 'home' })}
       />
     );
   }
+
   return (
     <Home
       saved={saved}
+      today={today}
       update={update}
       challenge={challenge}
       onDecline={dropChallenge}
@@ -111,7 +153,7 @@ function Logo() {
     <h1 className="logo" aria-label="Word Race">
       <span className="logo-tiles" aria-hidden="true">
         {[...'WORD'].map((letter, i) => (
-          <b key={letter} style={{ '--i': i } as React.CSSProperties}>
+          <b key={letter} style={{ '--i': i } as CSSProperties}>
             {letter}
           </b>
         ))}
@@ -123,27 +165,44 @@ function Logo() {
   );
 }
 
+function Hearts({ left, of }: { left: number; of: number }) {
+  return (
+    <span className="mini-hearts" aria-label={`${left} of ${of} hearts left`}>
+      {Array.from({ length: of }, (_, i) => (
+        <i key={i} className={i < left ? 'full' : ''} aria-hidden="true">
+          ♥
+        </i>
+      ))}
+    </span>
+  );
+}
+
 interface HomeProps {
   saved: Saved;
+  today: number;
   update: (patch: Partial<Saved>) => void;
   challenge: Challenge | null;
   onDecline: () => void;
-  onStart: (minutes: Minutes, from: Challenge | null) => void;
-  onDaily: () => void;
+  onStart: (kind: Kind, minutes: Minutes, from?: Challenge | null) => void;
+  onDaily: (kind: Kind) => void;
 }
 
-function Home({ saved, update, challenge, onDecline, onStart, onDaily }: HomeProps) {
-  const [showHow, setShowHow] = useState(saved.races === 0);
-  const day = dailyNumber();
-  const dailyDone = saved.daily?.day === day ? saved.daily : null;
+function Home({ saved, today, update, challenge, onDecline, onStart, onDaily }: HomeProps) {
+  const [showHow, setShowHow] = useState(saved.games === 0);
+  const { kind, minutes } = saved;
 
-  // Enter starts a race from the keyboard.
+  const race = saved.dailyRace?.day === today ? saved.dailyRace : null;
+  const tower = saved.dailyTower?.day === today ? saved.dailyTower : null;
+  const towerFloors = tower ? scoreOf(tower).solved : 0;
+  const towerHearts = tower ? livesLeft(tower.boards, DAILY_TOWER_LIVES) : DAILY_TOWER_LIVES;
+
+  // Enter starts from the keyboard.
   const startRef = useRef<() => void>(() => {});
-  startRef.current = () => (challenge ? onStart(challenge.minutes, challenge) : onStart(saved.minutes, null));
+  startRef.current = () => (challenge ? onStart(challenge.kind, challenge.minutes, challenge) : onStart(kind, minutes));
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLButtonElement;
-      if (e.key === 'Enter' && !typing) startRef.current();
+      const busy = e.target instanceof HTMLInputElement || e.target instanceof HTMLButtonElement;
+      if (e.key === 'Enter' && !busy) startRef.current();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -163,75 +222,114 @@ function Home({ saved, update, challenge, onDecline, onStart, onDaily }: HomePro
       </button>
 
       <Logo />
-      <p className="tagline">How many words can you crack before the clock runs out?</p>
 
       {challenge ? (
         <section className="card challenge">
-          <p className="eyebrow">You've been challenged</p>
+          <p className="eyebrow">
+            {KIND_INFO[challenge.kind].icon} You've been challenged
+          </p>
           <p className="card-big">
-            {challenge.name || 'A friend'} solved <b>{plural(challenge.solved, 'word')}</b> in {challenge.minutes} minutes
+            {challenge.name || 'A friend'} {challenge.kind === 'tower' ? 'built' : 'solved'}{' '}
+            <b>{unit(challenge.kind, challenge.solved)}</b> in {challenge.minutes} minutes
           </p>
           <p className="muted">Same words. Same clock. Your move.</p>
-          <button className="btn primary" onClick={() => onStart(challenge.minutes, challenge)}>
-            Accept the race
+          <button className="btn primary" onClick={() => onStart(challenge.kind, challenge.minutes, challenge)}>
+            Accept the challenge
           </button>
           <button className="btn link" onClick={onDecline}>
             Not now
           </button>
         </section>
       ) : (
-        <>
-          <div className="modes" role="radiogroup" aria-label="Race length">
-            {MODES.map((m) => (
+        <section className="play-panel">
+          <div className="kinds" role="tablist" aria-label="Game">
+            {KINDS.map((k) => (
               <button
-                key={m}
-                role="radio"
-                aria-checked={saved.minutes === m}
-                className={`mode${saved.minutes === m ? ' on' : ''}`}
-                onClick={() => update({ minutes: m })}
+                key={k}
+                role="tab"
+                aria-selected={kind === k}
+                className={`kind${kind === k ? ' on' : ''}`}
+                onClick={() => update({ kind: k })}
               >
-                <strong>{m} min</strong>
-                <small>{saved.best[m] ? `Best ${saved.best[m].solved}` : m === 3 ? 'Sprint' : 'Marathon'}</small>
+                <span aria-hidden="true">{KIND_INFO[k].icon}</span> {KIND_INFO[k].title}
               </button>
             ))}
           </div>
-          <button className="btn primary big" onClick={() => onStart(saved.minutes, null)}>
-            Start race
+          <p className="blurb">{KIND_INFO[kind].blurb}</p>
+          <div className="modes" role="radiogroup" aria-label="Length">
+            {MODES.map((m) => {
+              const best = saved.best[bestKey(kind, m)];
+              return (
+                <button
+                  key={m}
+                  role="radio"
+                  aria-checked={minutes === m}
+                  className={`mode${minutes === m ? ' on' : ''}`}
+                  onClick={() => update({ minutes: m })}
+                >
+                  <strong>{m} min</strong>
+                  <small>{best ? `Best ${best.solved}` : m === 3 ? 'Sprint' : 'Marathon'}</small>
+                </button>
+              );
+            })}
+          </div>
+          <button className="btn primary big" onClick={() => onStart(kind, minutes)}>
+            Start {KIND_INFO[kind].title.toLowerCase()}
           </button>
-          <button className="daily" onClick={onDaily} disabled={!!dailyDone}>
-            <span className="daily-icon" aria-hidden="true">
-              <small>Daily</small>#{day}
-            </span>
-            <span className="daily-text">
-              <strong>{dailyDone ? `Today: ${plural(dailyDone.solved, 'word')}` : "Today's race"}</strong>
-              <small>{dailyDone ? 'New words tomorrow' : `Same words for everyone · ${DAILY_MINUTES} min`}</small>
-            </span>
-            {dailyDone ? (
-              <span className="daily-check" aria-hidden="true">
-                ✓
-              </span>
-            ) : (
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M9 6l6 6-6 6" />
-              </svg>
-            )}
-          </button>
-        </>
+        </section>
       )}
 
-      {saved.races > 0 && (
-        <p className="stats">
-          <span>
-            <b>{saved.races}</b> {saved.races === 1 ? 'race' : 'races'}
+      <section className="dailies" aria-label="Daily games">
+        <h2>Daily · #{today}</h2>
+        <button className="daily tower" onClick={() => onDaily('tower')} disabled={!!tower?.done}>
+          <span className="daily-icon" aria-hidden="true">
+            🏗️
           </span>
-          <span>
-            <b>{saved.words}</b> {saved.words === 1 ? 'word' : 'words'} solved
+          <span className="daily-text">
+            <strong>
+              {tower?.done ? `Built ${unit('tower', towerFloors)}` : tower ? `Floor ${towerFloors + 1}` : 'Daily tower'}
+            </strong>
+            <small>
+              {tower?.done ? (
+                'New tower tomorrow'
+              ) : tower ? (
+                <>
+                  Tap to keep building · <Hearts left={towerHearts} of={DAILY_TOWER_LIVES} />
+                </>
+              ) : (
+                'No clock · build all day · 3 hearts'
+              )}
+            </small>
           </span>
-          <button className="how-toggle" onClick={() => setShowHow(!showHow)} aria-expanded={showHow}>
-            How to play
-          </button>
-        </p>
-      )}
+          <DailyEnd done={!!tower?.done} />
+        </button>
+        <button className="daily race" onClick={() => onDaily('race')} disabled={!!race}>
+          <span className="daily-icon" aria-hidden="true">
+            ⚡
+          </span>
+          <span className="daily-text">
+            <strong>{race ? `Raced: ${unit('race', race.solved)}` : 'Daily race'}</strong>
+            <small>{race ? 'New race tomorrow' : `Same words for everyone · ${DAILY_RACE_MINUTES} min`}</small>
+          </span>
+          <DailyEnd done={!!race} />
+        </button>
+      </section>
+
+      <p className="stats">
+        {saved.games > 0 && (
+          <>
+            <span>
+              <b>{saved.games}</b> {saved.games === 1 ? 'game' : 'games'}
+            </span>
+            <span>
+              <b>{saved.solved}</b> words cracked
+            </span>
+          </>
+        )}
+        <button className="how-toggle" onClick={() => setShowHow(!showHow)} aria-expanded={showHow}>
+          {showHow ? 'Hide how to play' : 'How to play'}
+        </button>
+      </p>
 
       {showHow && (
         <section className="card how">
@@ -247,23 +345,24 @@ function Home({ saved, update, challenge, onDecline, onStart, onDaily }: HomePro
             </li>
           </ul>
           <p className="muted">
-            Six guesses a word. Solve it and the next one drops straight in. Stuck? Skip it — the clock won't wait.
+            Six guesses a word. <b>Tower</b>: words grow from 3 to 8 letters, then start over a level up. <b>Race</b>:
+            five letters, every time. Stuck? Skip — the clock won't wait.
           </p>
         </section>
       )}
-
-      <label className="name-field">
-        <span>Your name on challenges</span>
-        <input
-          value={saved.name}
-          onChange={(e) => update({ name: e.target.value.slice(0, 16) })}
-          placeholder="Optional"
-          maxLength={16}
-          autoComplete="nickname"
-          enterKeyHint="done"
-        />
-      </label>
     </main>
+  );
+}
+
+function DailyEnd({ done }: { done: boolean }) {
+  return done ? (
+    <span className="daily-check" aria-label="Done for today">
+      ✓
+    </span>
+  ) : (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M9 6l6 6-6 6" />
+    </svg>
   );
 }
 
@@ -273,47 +372,58 @@ interface DoneProps {
   newBest: boolean;
   best?: Score;
   name: string;
+  onName: (name: string) => void;
+  againLabel: string;
   onAgain: () => void;
   onHome: () => void;
 }
 
-function Done({ result, challenge, newBest, best, name, onAgain, onHome }: DoneProps) {
+function Done({ result, challenge, newBest, best, name, onName, againLabel, onAgain, onHome }: DoneProps) {
   const score = scoreOf(result);
   const shown = useCountUp(score.solved);
   const [shared, setShared] = useState<'copied' | 'failed' | null>(null);
+  const tower = result.kind === 'tower';
+  // Untimed daily towers have no clock to match, so they share the game itself.
+  const challengeable = result.minutes !== null;
 
   const versus = challenge ? compareScores(score, challenge) : 0;
   const rival = challenge?.name || 'your friend';
-  const headline = !challenge
-    ? score.solved === 0
-      ? 'Tough round'
-      : newBest
-        ? 'New best!'
-        : "Time's up!"
-    : versus > 0
+  const headline = challenge
+    ? versus > 0
       ? `You beat ${rival}!`
       : versus < 0
         ? `${rival} takes it`
-        : 'Dead heat!';
+        : 'Dead heat!'
+    : score.solved === 0
+      ? 'Tough one'
+      : newBest
+        ? 'New best!'
+        : result.minutes
+          ? "Time's up!"
+          : 'Tower complete!';
 
-  // Enter races again from the keyboard — but not in the first moments, when a
-  // player still typing as the clock hit zero would skip straight past their score.
+  // Enter plays again — but not in the first moments, when a player still
+  // typing as the clock hit zero would skip straight past their score.
   const againRef = useRef(onAgain);
   againRef.current = onAgain;
   useEffect(() => {
     const readyAt = Date.now() + 1500;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && Date.now() > readyAt && !(e.target instanceof HTMLButtonElement)) againRef.current();
+      const busy = e.target instanceof HTMLButtonElement || e.target instanceof HTMLInputElement;
+      if (e.key === 'Enter' && Date.now() > readyAt && !busy) againRef.current();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
   async function share() {
-    const url = `${location.origin}${location.pathname}#${encodeChallenge({ seed: result.seed, minutes: result.minutes, name: name.trim(), ...score })}`;
+    const base = `${location.origin}${location.pathname}`;
+    const url = challengeable
+      ? `${base}#${encodeChallenge({ kind: result.kind, seed: result.seed, minutes: result.minutes!, name: name.trim(), ...score })}`
+      : base;
     const text = shareText(result);
     try {
-      if (navigator.share) return await navigator.share({ title: 'Word Race', text, url });
+      if (navigator.share) return await navigator.share({ title: tower ? 'Word Tower' : 'Word Race', text, url });
       await navigator.clipboard.writeText(`${text}\n${url}`);
       setShared('copied');
     } catch (e) {
@@ -321,15 +431,29 @@ function Done({ result, challenge, newBest, best, name, onAgain, onHome }: DoneP
     }
   }
 
+  const shareLabel =
+    shared === 'copied'
+      ? 'Copied — paste it anywhere'
+      : challenge
+        ? 'Send your score back'
+        : challengeable
+          ? 'Challenge a friend'
+          : 'Share my tower';
+
   return (
-    <main className="screen done">
+    <main className={`screen done ${result.kind}`}>
       {score.solved > 0 && versus >= 0 && <Confetti />}
       <p className="eyebrow">{headline}</p>
       <div className="big-score">{shown}</div>
       <p className="score-line">
-        {score.solved === 1 ? 'word' : 'words'} in {result.minutes} minutes
+        {tower ? (score.solved === 1 ? 'floor built' : 'floors built') : score.solved === 1 ? 'word' : 'words'}{' '}
+        {result.minutes ? `in ${result.minutes} minutes` : 'today'}
       </p>
-      {result.daily && <p className="daily-tag">Daily race #{result.daily}</p>}
+      {result.daily && (
+        <p className="daily-tag">
+          Daily {tower ? 'tower' : 'race'} #{result.daily}
+        </p>
+      )}
 
       {challenge && (
         <div className="versus">
@@ -345,41 +469,85 @@ function Done({ result, challenge, newBest, best, name, onAgain, onHome }: DoneP
         </div>
       )}
       {challenge && versus !== 0 && score.solved === challenge.solved && (
-        <p className="muted">Level on words, decided on fewest guesses.</p>
+        <p className="muted">Level on {tower ? 'floors' : 'words'}, decided on fewest guesses.</p>
       )}
 
       {score.solved > 0 && (
         <p className="muted">
-          {(score.guesses / score.solved).toFixed(1)} guesses per solve
+          {(score.guesses / score.solved).toFixed(1)} guesses per word
           {newBest && challenge ? ' · new personal best' : ''}
           {!newBest && best ? ` · your best is ${best.solved}` : ''}
         </p>
       )}
 
+      {tower && score.solved > 0 && <TowerView boards={result.boards} />}
+
       <div className="actions">
+        {challengeable && (
+          <label className="name-field">
+            <span>Your name</span>
+            <input
+              value={name}
+              onChange={(e) => onName(e.target.value.slice(0, 16))}
+              placeholder="So friends know who to beat"
+              maxLength={16}
+              autoComplete="nickname"
+              enterKeyHint="done"
+            />
+          </label>
+        )}
         <button className="btn primary big" onClick={share}>
-          {shared === 'copied' ? 'Copied — paste it anywhere' : challenge ? 'Send your score back' : 'Challenge a friend'}
+          {shareLabel}
         </button>
         {shared === 'failed' && <p className="muted">Couldn't share from this browser.</p>}
         <button className="btn secondary" onClick={onAgain}>
-          Race again
+          {againLabel}
         </button>
         <button className="btn link" onClick={onHome}>
           Home
         </button>
       </div>
 
-      {result.boards.length > 0 && (
-        <section className="recap" aria-label="Your words">
-          {result.boards.map((b) => (
-            <span key={b.word} className={b.solved ? 'got' : ''}>
-              {b.word}
-              {b.solved && <small>{b.guesses}</small>}
-            </span>
-          ))}
-        </section>
-      )}
+      {!tower && result.boards.length > 0 && <Recap boards={result.boards} />}
     </main>
+  );
+}
+
+const TOWER_COLORS = ['mint', 'sun', 'orange', 'pink', 'violet', 'sky'];
+
+/** The tower you built: one floor per solved word, newest on top. */
+function TowerView({ boards }: { boards: Board[] }) {
+  const floors = boards.filter((b) => b.solved);
+  const shown = floors.slice(-7);
+  return (
+    <section className="tower-view" aria-label={`Your tower: ${floors.map((b) => b.word).join(', ')}`}>
+      {shown
+        .map((b, i) => {
+          const n = floors.length - shown.length + i;
+          return (
+            <div key={n} className={`floor ${TOWER_COLORS[n % TOWER_COLORS.length]}`} style={{ '--n': i } as CSSProperties}>
+              {[...b.word].map((letter, j) => (
+                <i key={j}>{letter}</i>
+              ))}
+            </div>
+          );
+        })
+        .reverse()}
+      {floors.length > shown.length && <p className="more">+ {unit('tower', floors.length - shown.length)} below</p>}
+    </section>
+  );
+}
+
+function Recap({ boards }: { boards: Board[] }) {
+  return (
+    <section className="recap" aria-label="Your words">
+      {boards.map((b, i) => (
+        <span key={i} className={b.solved ? 'got' : ''}>
+          {b.word}
+          {b.solved && <small>{b.guesses}</small>}
+        </span>
+      ))}
+    </section>
   );
 }
 
@@ -411,7 +579,7 @@ function Confetti() {
   return (
     <div className="confetti" aria-hidden="true">
       {pieces.map((style, i) => (
-        <i key={i} style={style as React.CSSProperties} />
+        <i key={i} style={style as CSSProperties} />
       ))}
     </div>
   );

@@ -1,22 +1,23 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, useEffect, useRef, useState } from 'react';
+import { isWord } from './dictionary';
 import {
   type Board,
+  type Kind,
   MAX_GUESSES,
   type Minutes,
   type Result,
-  WORD_LENGTH,
   letterMarks,
+  livesLeft,
+  nextWord,
   praiseFor,
   scoreGuess,
   streakOf,
-  wordsForSeed,
 } from './game';
 import { sfx } from './sound';
-import { ALLOWED } from './words/allowed';
 
 const KEY_ROWS = ['qwertyuiop', 'asdfghjkl', '+zxcvbnm-'];
 const COUNT_FROM = 3;
-const SOLVED_PAUSE = 850;
+const SOLVED_PAUSE = 900;
 const MISSED_PAUSE = 1500;
 const SKIPPED_PAUSE = 1000;
 const GO_FLASH = 650;
@@ -26,29 +27,43 @@ const clock = (ms: number) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
+export interface Progress {
+  boards: Board[];
+  guesses: string[];
+}
+
 interface Props {
+  kind: Kind;
   seed: string;
-  minutes: Minutes;
+  /** null = untimed (the daily tower). */
+  minutes: Minutes | null;
+  /** Misses allowed before the game ends; unlimited when left out. */
+  lives?: number;
+  resume?: Progress;
+  onSave?: (progress: Progress) => void;
   onDone: (result: Result) => void;
   onQuit: () => void;
 }
 
-export function Play({ seed, minutes, onDone, onQuit }: Props) {
-  const words = useMemo(() => wordsForSeed(seed), [seed]);
-  const total = minutes * 60_000;
+export function Play({ kind, seed, minutes, lives, resume, onSave, onDone, onQuit }: Props) {
+  const timed = minutes !== null;
+  const total = (minutes ?? 0) * 60_000;
+  const tower = kind === 'tower';
 
-  const [count, setCount] = useState(COUNT_FROM);
+  const [count, setCount] = useState(timed ? COUNT_FROM : 0);
   const [left, setLeft] = useState(total);
-  const [boards, setBoards] = useState<Board[]>([]);
-  const [guesses, setGuesses] = useState<string[]>([]);
+  const [boards, setBoards] = useState<Board[]>(resume?.boards ?? []);
+  const [guesses, setGuesses] = useState<string[]>(resume?.guesses ?? []);
   const [draft, setDraft] = useState('');
   /** Set while a finished board is still on screen, before the next one drops in. */
   const [outcome, setOutcome] = useState<'solved' | 'missed' | 'skipped' | null>(null);
   const [confirmQuit, setConfirmQuit] = useState(false);
   const [nudge, setNudge] = useState<{ text: string; id: number } | null>(null);
 
-  const answer = words[boards.length - (outcome ? 1 : 0)];
-  const running = count === 0 && left > 0;
+  const answer = outcome ? boards[boards.length - 1].word : nextWord(kind, seed, boards);
+  const hearts = lives === undefined ? null : livesLeft(boards, lives);
+  const timeUp = timed && left <= 0;
+  const running = count === 0 && !timeUp && hearts !== 0;
 
   // 3 · 2 · 1
   useEffect(() => {
@@ -58,40 +73,56 @@ export function Play({ seed, minutes, onDone, onQuit }: Props) {
     return () => clearTimeout(t);
   }, [count]);
 
-  // The race clock runs off the wall clock, so a backgrounded tab can't stretch it.
+  // The clock runs off the wall clock, so a backgrounded tab can't stretch it.
   useEffect(() => {
-    if (count !== 0) return;
+    if (!timed || count !== 0) return;
     sfx.go();
     const endAt = Date.now() + total;
     const t = setInterval(() => setLeft(Math.max(0, endAt - Date.now())), 100);
     return () => clearInterval(t);
-  }, [count, total]);
+  }, [timed, count, total]);
 
   const secondsLeft = Math.ceil(left / 1000);
+  const low = timed && count === 0 && secondsLeft <= 10;
   useEffect(() => {
-    if (running && secondsLeft <= 5) sfx.tick();
-  }, [running, secondsLeft]);
+    if (low && secondsLeft <= 5 && secondsLeft > 0) sfx.tick();
+  }, [low, secondsLeft]);
+
+  // Keep the daily tower saved after every move. A finished board is already in
+  // `boards`, so its guesses aren't saved a second time.
+  const saveRef = useRef(onSave);
+  saveRef.current = onSave;
+  useEffect(() => {
+    saveRef.current?.({ boards, guesses: outcome ? [] : guesses });
+  }, [boards, guesses, outcome]);
+
+  const finished = useRef(false);
+  const finish = (all: Board[]) => {
+    if (finished.current) return;
+    finished.current = true;
+    onDone({ kind, seed, minutes, boards: all });
+  };
 
   // Time's up: hand back everything finished, plus the board in progress.
-  const finished = useRef(false);
   useEffect(() => {
-    if (left > 0 || finished.current) return;
-    finished.current = true;
+    if (!timeUp) return;
     const unfinished = !outcome && guesses.length > 0 ? [{ word: answer, solved: false, guesses: guesses.length }] : [];
-    onDone({ seed, minutes, boards: [...boards, ...unfinished] });
+    finish([...boards, ...unfinished]);
   });
 
-  // Hold a finished board on screen for a beat, then deal the next one.
+  // Hold a finished board on screen for a beat, then deal the next one — or end
+  // the game if that was the last heart.
   useEffect(() => {
     if (!outcome) return;
-    const t = setTimeout(
-      () => {
-        setGuesses([]);
-        setOutcome(null);
-      },
-      outcome === 'solved' ? SOLVED_PAUSE : outcome === 'skipped' ? SKIPPED_PAUSE : MISSED_PAUSE,
-    );
+    const pause = outcome === 'solved' ? SOLVED_PAUSE : outcome === 'skipped' ? SKIPPED_PAUSE : MISSED_PAUSE;
+    const t = setTimeout(() => {
+      if (hearts === 0) return finish(boards);
+      setGuesses([]);
+      setOutcome(null);
+    }, pause);
     return () => clearTimeout(t);
+    // Only the outcome starts the pause: re-running on every clock tick would keep restarting it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [outcome]);
 
   useEffect(() => {
@@ -110,28 +141,26 @@ export function Play({ seed, minutes, onDone, onQuit }: Props) {
     if (!running || outcome) return;
     if (key === 'enter') return submit();
     if (key === 'back') return setDraft(draft.slice(0, -1));
-    if (draft.length < WORD_LENGTH) {
+    if (draft.length < answer.length) {
       sfx.tap();
       setDraft(draft + key);
     }
   }
 
+  function endBoard(solved: boolean, used: number, how: 'solved' | 'missed' | 'skipped') {
+    setBoards([...boards, { word: answer, solved, guesses: used }]);
+    setDraft('');
+    setOutcome(how);
+  }
+
   function skip() {
     if (!running || outcome) return;
     sfx.missed();
-    setBoards([...boards, { word: answer, solved: false, guesses: guesses.length }]);
-    setDraft('');
-    setOutcome('skipped');
-  }
-
-  // One tap to quit before anything is played; after that, tap twice so a stray tap can't wipe a run.
-  function quit() {
-    if (confirmQuit || (boards.length === 0 && guesses.length === 0)) return onQuit();
-    setConfirmQuit(true);
+    endBoard(false, guesses.length, 'skipped');
   }
 
   function submit() {
-    const problem = draft.length < WORD_LENGTH ? 'Not enough letters' : !ALLOWED.has(draft) ? 'Not a word' : null;
+    const problem = draft.length < answer.length ? 'Not enough letters' : !isWord(draft) ? 'Not in our word list' : null;
     if (problem) {
       sfx.nope();
       return setNudge({ text: problem, id: Date.now() });
@@ -141,9 +170,16 @@ export function Play({ seed, minutes, onDone, onQuit }: Props) {
     setDraft('');
     const solved = draft === answer;
     if (!solved && next.length < MAX_GUESSES) return sfx.guess();
-    solved ? sfx.solved() : sfx.missed();
-    setBoards([...boards, { word: answer, solved, guesses: next.length }]);
-    setOutcome(solved ? 'solved' : 'missed');
+    if (solved) sfx.solved();
+    else sfx.missed();
+    endBoard(solved, next.length, solved ? 'solved' : 'missed');
+  }
+
+  // Untimed games save as they go, so leaving is free. A timed run would be
+  // lost, so once it's under way quitting takes a second tap.
+  function quit() {
+    if (!timed || confirmQuit || (boards.length === 0 && guesses.length === 0)) return onQuit();
+    setConfirmQuit(true);
   }
 
   // Physical keyboard. The ref keeps the listener pointed at the latest state.
@@ -165,15 +201,16 @@ export function Play({ seed, minutes, onDone, onQuit }: Props) {
   const solvedCount = boards.filter((b) => b.solved).length;
   const boardNumber = boards.length + (outcome ? 0 : 1);
   const streak = streakOf(boards);
-  const showGo = count === 0 && total - left < GO_FLASH;
+  const showGo = timed && count === 0 && total - left < GO_FLASH;
+  const label = tower ? (solvedCount === 1 ? 'floor' : 'floors') : 'solved';
 
   return (
-    <main className="screen play">
+    <main className={`screen play ${kind}`}>
       <header className="hud">
         <button
           className={`icon-btn quit${confirmQuit ? ' confirm' : ''}`}
           onClick={quit}
-          aria-label={confirmQuit ? 'Tap again to quit' : 'Quit race'}
+          aria-label={!timed ? 'Save and leave' : confirmQuit ? 'Tap again to quit' : 'Quit'}
         >
           {confirmQuit ? (
             'Quit?'
@@ -183,30 +220,50 @@ export function Play({ seed, minutes, onDone, onQuit }: Props) {
             </svg>
           )}
         </button>
-        <div className={`clock${running && secondsLeft <= 10 ? ' low' : ''}`} role="timer" aria-label="Time left">
-          {clock(left)}
-        </div>
-        <div className="solved-count" aria-label={`${solvedCount} solved`}>
+
+        {timed ? (
+          <div className={`clock${low ? ' low' : ''}`} role="timer" aria-label="Time left">
+            {clock(left)}
+          </div>
+        ) : (
+          <div className="hearts" aria-label={`${hearts} of ${lives} lives left`}>
+            {Array.from({ length: lives ?? 0 }, (_, i) => (
+              <svg key={i} viewBox="0 0 24 24" className={i < (hearts ?? 0) ? 'full' : 'lost'} aria-hidden="true">
+                <path d="M12 20.5s-7.5-4.6-7.5-10.2A4.3 4.3 0 0112 7.6a4.3 4.3 0 017.5 2.7c0 5.6-7.5 10.2-7.5 10.2z" />
+              </svg>
+            ))}
+          </div>
+        )}
+
+        <div className="solved-count" aria-label={`${solvedCount} ${label}`}>
           <span key={solvedCount} className={solvedCount ? 'bump' : ''}>
             {solvedCount}
           </span>
-          <small>solved</small>
+          <small>{label}</small>
         </div>
       </header>
-      <div className="timebar">
-        <i className={running && secondsLeft <= 10 ? 'low' : ''} style={{ transform: `scaleX(${left / total})` }} />
-      </div>
+
+      {timed && (
+        <div className="timebar">
+          <i className={low ? 'low' : ''} style={{ transform: `scaleX(${left / total})` }} />
+        </div>
+      )}
 
       <section className="board-wrap">
         <div className="toast-slot" aria-live="assertive">
           {outcome === 'missed' || outcome === 'skipped' ? (
             <div className="toast answer">
               It was <b>{answer}</b>
+              {hearts !== null && <span className="streak">{hearts === 0 ? 'Out of hearts' : `${hearts} ♥ left`}</span>}
             </div>
           ) : outcome === 'solved' ? (
             <div className="toast good">
               {praiseFor(guesses.length)}
-              {streak >= 2 && <span className="streak">🔥 {streak} in a row</span>}
+              {tower ? (
+                <span className="streak">Floor {solvedCount} 🧱</span>
+              ) : (
+                streak >= 2 && <span className="streak">🔥 {streak} in a row</span>
+              )}
             </div>
           ) : nudge ? (
             <div className="toast" key={nudge.id}>
@@ -215,7 +272,7 @@ export function Play({ seed, minutes, onDone, onQuit }: Props) {
           ) : null}
         </div>
 
-        <div className="board" key={boardNumber} aria-label={`Word ${boardNumber}`}>
+        <div className="board" key={boardNumber} style={{ '--len': answer.length } as CSSProperties} aria-label={`Word ${boardNumber}, ${answer.length} letters`}>
           {Array.from({ length: MAX_GUESSES }, (_, r) => {
             const guess = guesses[r];
             const isDraft = r === guesses.length && !outcome;
@@ -227,11 +284,11 @@ export function Play({ seed, minutes, onDone, onQuit }: Props) {
                 className={`row${won ? ' won' : ''}${isDraft && nudge ? ' shake' : ''}`}
                 key={isDraft && nudge ? `shake-${nudge.id}` : r}
               >
-                {Array.from({ length: WORD_LENGTH }, (_, i) => (
+                {Array.from({ length: answer.length }, (_, i) => (
                   <div
                     key={i}
                     className={`tile ${marks ? marks[i] : letters[i] ? 'filled' : isDraft ? 'open' : ''}`}
-                    style={{ '--i': i } as React.CSSProperties}
+                    style={{ '--i': i } as CSSProperties}
                   >
                     {letters[i]}
                   </div>
@@ -252,11 +309,19 @@ export function Play({ seed, minutes, onDone, onQuit }: Props) {
 
       <div className="subbar">
         <span>
-          Word <b>{boardNumber}</b>
-          {streak >= 2 && !outcome && <em> · 🔥 {streak}</em>}
+          {tower ? (
+            <>
+              Floor <b>{solvedCount + 1}</b> · {answer.length} letters
+            </>
+          ) : (
+            <>
+              Word <b>{boardNumber}</b>
+              {streak >= 2 && !outcome && <em> · 🔥 {streak}</em>}
+            </>
+          )}
         </span>
         <button className="skip" onClick={skip} disabled={!running || !!outcome}>
-          Skip
+          {hearts !== null ? 'Give up' : 'Skip'}
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M6 6l6 6-6 6M13 6l6 6-6 6" />
           </svg>
@@ -272,7 +337,7 @@ export function Play({ seed, minutes, onDone, onQuit }: Props) {
                 <button
                   key={key}
                   className={`key ${key.length > 1 ? `wide ${key}` : (keyMarks.get(key) ?? '')}`}
-                  aria-label={key === 'back' ? 'Backspace' : key}
+                  aria-label={key === 'back' ? 'Backspace' : key === 'enter' ? 'Enter' : key}
                   onPointerDown={(e) => {
                     e.preventDefault();
                     press(key);

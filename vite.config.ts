@@ -6,5 +6,6 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   base: './',
   plugins: [react()],
-  build: { target: 'es2020' },
+  // The guess dictionary is one big chunk on purpose; it loads in the background.
+  build: { target: 'es2020', chunkSizeWarningLimit: 1000 },
 });
