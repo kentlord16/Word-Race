@@ -481,7 +481,7 @@ function Done({ result, challenge, newBest, best, name, onName, againLabel, onAg
       )}
 
       {tower && score.solved > 0 && <TowerView boards={result.boards} />}
-      {tower && <GotAway boards={result.boards} />}
+      <GotAway boards={result.boards} unfinished={result.unfinished} />
 
       <div className="actions">
         {challengeable && (
@@ -509,7 +509,7 @@ function Done({ result, challenge, newBest, best, name, onName, againLabel, onAg
         </button>
       </div>
 
-      {!tower && result.boards.length > 0 && <Recap boards={result.boards} />}
+      {!tower && score.solved > 0 && <Recap boards={result.boards.filter((b) => b.solved)} />}
     </main>
   );
 }
@@ -539,17 +539,23 @@ function TowerView({ boards }: { boards: Board[] }) {
   );
 }
 
-/** Words that beat you, so you can see what they were. */
-function GotAway({ boards }: { boards: Board[] }) {
+/** Every word that beat you, so you always find out what it was. */
+function GotAway({ boards, unfinished }: { boards: Board[]; unfinished?: string }) {
   const missed = boards.filter((b) => !b.solved);
-  if (missed.length === 0) return null;
+  const count = missed.length + (unfinished ? 1 : 0);
+  if (count === 0) return null;
   return (
     <section className="got-away">
-      <h3>{missed.length === 1 ? 'The one that got away' : 'The ones that got away'}</h3>
+      <h3>{count === 1 ? 'The one that got away' : 'The ones that got away'}</h3>
       <div className="recap">
         {missed.map((b, i) => (
           <span key={i}>{b.word}</span>
         ))}
+        {unfinished && (
+          <span className="timed-out" title="Time ran out on this one">
+            ⏱ {unfinished}
+          </span>
+        )}
       </div>
     </section>
   );

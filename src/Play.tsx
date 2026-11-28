@@ -18,8 +18,8 @@ import { sfx } from './sound';
 const KEY_ROWS = ['qwertyuiop', 'asdfghjkl', '+zxcvbnm-'];
 const COUNT_FROM = 3;
 const SOLVED_PAUSE = 900;
-const MISSED_PAUSE = 2200;
-const SKIPPED_PAUSE = 1600;
+const MISSED_PAUSE = 2600;
+const SKIPPED_PAUSE = 2000;
 const GO_FLASH = 650;
 
 const clock = (ms: number) => {
@@ -97,32 +97,34 @@ export function Play({ kind, seed, minutes, lives, resume, onSave, onDone, onQui
   }, [boards, guesses, outcome]);
 
   const finished = useRef(false);
-  const finish = (all: Board[]) => {
+  const finish = (unfinished?: string) => {
     if (finished.current) return;
     finished.current = true;
-    onDone({ kind, seed, minutes, boards: all });
+    onDone({ kind, seed, minutes, boards, unfinished });
   };
 
-  // Time's up: hand back everything finished, plus the board in progress.
+  // Time's up: hand back every finished board, plus the word that was on screen
+  // so the results can show it.
   useEffect(() => {
-    if (!timeUp) return;
-    const unfinished = !outcome && guesses.length > 0 ? [{ word: answer, solved: false, guesses: guesses.length }] : [];
-    finish([...boards, ...unfinished]);
+    if (timeUp) finish(outcome ? undefined : answer);
   });
 
-  // Hold a finished board on screen for a beat, then deal the next one — or end
-  // the game if that was the last heart.
+  // After a board ends, deal the next one — or end the game if that was the last heart.
+  const dealNext = () => {
+    if (hearts === 0) return finish();
+    setGuesses([]);
+    setOutcome(null);
+  };
+  const dealRef = useRef(dealNext);
+  dealRef.current = dealNext;
+
+  // Hold a finished board on screen for a beat first. A missed word's reveal can
+  // be tapped away sooner.
   useEffect(() => {
     if (!outcome) return;
     const pause = outcome === 'solved' ? SOLVED_PAUSE : outcome === 'skipped' ? SKIPPED_PAUSE : MISSED_PAUSE;
-    const t = setTimeout(() => {
-      if (hearts === 0) return finish(boards);
-      setGuesses([]);
-      setOutcome(null);
-    }, pause);
+    const t = setTimeout(() => dealRef.current(), pause);
     return () => clearTimeout(t);
-    // Only the outcome starts the pause: re-running on every clock tick would keep restarting it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [outcome]);
 
   useEffect(() => {
@@ -138,6 +140,7 @@ export function Play({ kind, seed, minutes, lives, resume, onSave, onDone, onQui
   }, [nudge]);
 
   function press(key: string) {
+    if (outcome && outcome !== 'solved' && key === 'enter') return dealNext();
     if (!running || outcome) return;
     if (key === 'enter') return submit();
     if (key === 'back') return setDraft(draft.slice(0, -1));
@@ -251,19 +254,7 @@ export function Play({ kind, seed, minutes, lives, resume, onSave, onDone, onQui
 
       <section className="board-wrap">
         <div className="toast-slot" aria-live="assertive">
-          {outcome === 'missed' || outcome === 'skipped' ? (
-            <div className="toast answer">
-              It was
-              <span className="answer-tiles" aria-label={answer}>
-                {[...answer].map((letter, i) => (
-                  <i key={i} style={{ '--i': i } as CSSProperties}>
-                    {letter}
-                  </i>
-                ))}
-              </span>
-              {hearts !== null && <span className="streak">{hearts === 0 ? 'Out of hearts' : `${hearts} ♥ left`}</span>}
-            </div>
-          ) : outcome === 'solved' ? (
+          {outcome === 'solved' ? (
             <div className="toast good">
               {praiseFor(guesses.length)}
               {tower ? (
@@ -304,6 +295,23 @@ export function Play({ kind, seed, minutes, lives, resume, onSave, onDone, onQui
             );
           })}
         </div>
+
+        {(outcome === 'missed' || outcome === 'skipped') && (
+          <button className="reveal" onClick={dealNext} aria-live="assertive">
+            <span className="reveal-label">{outcome === 'skipped' ? 'Skipped — the word was' : 'The word was'}</span>
+            <span className="answer-tiles" style={{ '--len': answer.length } as CSSProperties} aria-label={answer}>
+              {[...answer].map((letter, i) => (
+                <i key={i} style={{ '--i': i } as CSSProperties}>
+                  {letter}
+                </i>
+              ))}
+            </span>
+            {hearts !== null && (
+              <span className="reveal-hearts">{hearts === 0 ? 'Out of hearts' : `${hearts} ${hearts === 1 ? 'heart' : 'hearts'} left`}</span>
+            )}
+            <span className="reveal-hint">{hearts === 0 ? 'Tap to see your tower' : 'Tap to keep going'}</span>
+          </button>
+        )}
 
         {(count > 0 || showGo) && (
           <div className="countdown" aria-live="assertive">

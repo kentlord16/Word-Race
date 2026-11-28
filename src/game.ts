@@ -113,6 +113,8 @@ export interface Result {
   boards: Board[];
   /** Set when this was a daily game. */
   daily?: number;
+  /** The word on screen when the clock ran out, unsolved. */
+  unfinished?: string;
 }
 
 export interface Score {
