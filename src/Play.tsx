@@ -18,8 +18,8 @@ import { sfx } from './sound';
 const KEY_ROWS = ['qwertyuiop', 'asdfghjkl', '+zxcvbnm-'];
 const COUNT_FROM = 3;
 const SOLVED_PAUSE = 900;
-const MISSED_PAUSE = 1500;
-const SKIPPED_PAUSE = 1000;
+const MISSED_PAUSE = 2200;
+const SKIPPED_PAUSE = 1600;
 const GO_FLASH = 650;
 
 const clock = (ms: number) => {
@@ -253,7 +253,14 @@ export function Play({ kind, seed, minutes, lives, resume, onSave, onDone, onQui
         <div className="toast-slot" aria-live="assertive">
           {outcome === 'missed' || outcome === 'skipped' ? (
             <div className="toast answer">
-              It was <b>{answer}</b>
+              It was
+              <span className="answer-tiles" aria-label={answer}>
+                {[...answer].map((letter, i) => (
+                  <i key={i} style={{ '--i': i } as CSSProperties}>
+                    {letter}
+                  </i>
+                ))}
+              </span>
               {hearts !== null && <span className="streak">{hearts === 0 ? 'Out of hearts' : `${hearts} ♥ left`}</span>}
             </div>
           ) : outcome === 'solved' ? (

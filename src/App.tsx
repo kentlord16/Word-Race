@@ -481,6 +481,7 @@ function Done({ result, challenge, newBest, best, name, onName, againLabel, onAg
       )}
 
       {tower && score.solved > 0 && <TowerView boards={result.boards} />}
+      {tower && <GotAway boards={result.boards} />}
 
       <div className="actions">
         {challengeable && (
@@ -534,6 +535,22 @@ function TowerView({ boards }: { boards: Board[] }) {
         })
         .reverse()}
       {floors.length > shown.length && <p className="more">+ {unit('tower', floors.length - shown.length)} below</p>}
+    </section>
+  );
+}
+
+/** Words that beat you, so you can see what they were. */
+function GotAway({ boards }: { boards: Board[] }) {
+  const missed = boards.filter((b) => !b.solved);
+  if (missed.length === 0) return null;
+  return (
+    <section className="got-away">
+      <h3>{missed.length === 1 ? 'The one that got away' : 'The ones that got away'}</h3>
+      <div className="recap">
+        {missed.map((b, i) => (
+          <span key={i}>{b.word}</span>
+        ))}
+      </div>
     </section>
   );
 }

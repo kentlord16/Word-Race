@@ -604,9 +604,57 @@ button {
   background: var(--mint);
 }
 
-.toast.answer b {
+.toast.answer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.answer-tiles {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.answer-tiles i {
+  display: grid;
+  place-items: center;
+  width: 1.6rem;
+  height: 1.75rem;
+  border-radius: 0.4rem;
+  background: var(--mint);
+  box-shadow: 0 2px 0 var(--mint-lip);
+  font-style: normal;
+  font-weight: 650;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  animation: reveal-answer 0.3s calc(var(--i) * 50ms) ease-out backwards;
+}
+
+@keyframes reveal-answer {
+  from {
+    opacity: 0;
+    transform: translateY(-0.4rem) scale(0.7);
+  }
+}
+
+.got-away {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.got-away h3 {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--soft);
+}
+
+.got-away .recap {
+  margin-top: 0;
+}
+
+.got-away .recap span {
+  background: rgba(255, 95, 162, 0.22);
+  color: #fff;
 }
 
 @keyframes toast-in {
